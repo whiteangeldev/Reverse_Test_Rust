@@ -16,11 +16,12 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Build (release)
+        working-directory: license_gate
         run: cargo build --release
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe
-          path: target/release/*.exe
+          path: license_gate/target/release/*.exe
 
