@@ -14,8 +14,13 @@ fn main() -> eframe::Result<()> {
         "CyberVault Pro - Secure Data Manager v3.2",
         options,
         Box::new(|cc| {
-            // Use dark theme
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // Use clean dark theme
+            let mut visuals = egui::Visuals::dark();
+            // Balanced colors for good readability
+            visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(50, 55, 65);
+            visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 70, 85);
+            visuals.widgets.active.bg_fill = egui::Color32::from_rgb(70, 120, 200);
+            cc.egui_ctx.set_visuals(visuals);
             Ok(Box::new(LicenseApp::default()))
         }),
     )
@@ -27,6 +32,10 @@ enum Tab {
     Encryption,
     Passwords,
     Vault,
+    ActivityLog,
+    SecurityScan,
+    BackupRestore,
+    Analytics,
     Settings,
 }
 
@@ -46,9 +55,27 @@ struct LicenseApp {
     new_password: String,
     // Vault state
     vault_items: Vec<VaultItem>,
+    // Activity Log state
+    activity_logs: Vec<ActivityLog>,
+    // Security Scan state
+    scan_progress: f32,
+    scan_running: bool,
+    threats_found: u32,
+    // Backup/Restore state
+    backup_location: String,
+    last_backup: String,
+    // Analytics state
+    analytics_data: Vec<(String, f32)>,
     // Settings
     auto_lock: bool,
     notifications: bool,
+}
+
+struct ActivityLog {
+    timestamp: String,
+    action: String,
+    status: String,
+    icon: String,
 }
 
 struct VaultItem {
@@ -85,6 +112,34 @@ impl Default for LicenseApp {
             },
         ];
 
+        let activity_logs = vec![
+            ActivityLog {
+                timestamp: "2026-02-01 08:30:15".to_string(),
+                action: "File encrypted".to_string(),
+                status: "Success".to_string(),
+                icon: "🔒".to_string(),
+            },
+            ActivityLog {
+                timestamp: "2026-02-01 08:25:42".to_string(),
+                action: "Password added".to_string(),
+                status: "Success".to_string(),
+                icon: "🔑".to_string(),
+            },
+            ActivityLog {
+                timestamp: "2026-02-01 08:20:10".to_string(),
+                action: "Security scan completed".to_string(),
+                status: "No threats".to_string(),
+                icon: "🛡️".to_string(),
+            },
+        ];
+
+        let analytics_data = vec![
+            ("Encryption".to_string(), 45.0),
+            ("Passwords".to_string(), 30.0),
+            ("Vault".to_string(), 15.0),
+            ("Other".to_string(), 10.0),
+        ];
+
         Self {
             key_input: String::new(),
             status: String::new(),
@@ -98,6 +153,13 @@ impl Default for LicenseApp {
             new_site: String::new(),
             new_password: String::new(),
             vault_items,
+            activity_logs,
+            scan_progress: 0.0,
+            scan_running: false,
+            threats_found: 0,
+            backup_location: "/backups/cybervault".to_string(),
+            last_backup: "2026-02-01 07:00:00".to_string(),
+            analytics_data,
             auto_lock: true,
             notifications: true,
         }
@@ -232,6 +294,31 @@ impl eframe::App for LicenseApp {
                 self.current_tab = Tab::Vault;
             }
 
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("ADVANCED").size(11.0).color(egui::Color32::GRAY));
+
+            let activity_selected = self.current_tab == Tab::ActivityLog;
+            if ui.add_enabled(self.unlocked, egui::Button::new("📋 Activity Log").selected(activity_selected)).clicked() {
+                self.current_tab = Tab::ActivityLog;
+            }
+
+            let security_selected = self.current_tab == Tab::SecurityScan;
+            if ui.add_enabled(self.unlocked, egui::Button::new("🛡️ Security Scan").selected(security_selected)).clicked() {
+                self.current_tab = Tab::SecurityScan;
+            }
+
+            let backup_selected = self.current_tab == Tab::BackupRestore;
+            if ui.add_enabled(self.unlocked, egui::Button::new("💾 Backup/Restore").selected(backup_selected)).clicked() {
+                self.current_tab = Tab::BackupRestore;
+            }
+
+            let analytics_selected = self.current_tab == Tab::Analytics;
+            if ui.add_enabled(self.unlocked, egui::Button::new("📊 Analytics").selected(analytics_selected)).clicked() {
+                self.current_tab = Tab::Analytics;
+            }
+
             ui.add_space(20.0);
             ui.separator();
             ui.add_space(10.0);
@@ -263,6 +350,10 @@ impl eframe::App for LicenseApp {
                 Tab::Encryption => self.show_encryption(ui),
                 Tab::Passwords => self.show_passwords(ui),
                 Tab::Vault => self.show_vault(ui),
+                Tab::ActivityLog => self.show_activity_log(ui),
+                Tab::SecurityScan => self.show_security_scan(ui),
+                Tab::BackupRestore => self.show_backup_restore(ui),
+                Tab::Analytics => self.show_analytics(ui),
                 Tab::Settings => self.show_settings(ui),
             }
         });
@@ -289,7 +380,7 @@ impl LicenseApp {
     }
 
     fn show_dashboard(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Dashboard");
+        ui.heading("📊 Dashboard");
         ui.add_space(10.0);
 
         // Welcome section
@@ -591,6 +682,259 @@ impl LicenseApp {
                     }
                 });
         });
+    }
+
+    fn show_activity_log(&mut self, ui: &mut egui::Ui) {
+        ui.heading("📋 Activity Log");
+        ui.add_space(10.0);
+        ui.label("View all security events and user activities.");
+        ui.add_space(15.0);
+
+        ui.horizontal(|ui| {
+            if ui.button("🔄 Refresh").clicked() {
+                // Refresh logs
+            }
+            if ui.button("📥 Export").clicked() {
+                // Export logs
+            }
+            if ui.button("🗑 Clear").clicked() {
+                // Clear logs
+            }
+        });
+
+        ui.add_space(15.0);
+
+        egui::ScrollArea::vertical().max_height(500.0).show(ui, |ui| {
+            for log in &self.activity_logs {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(25, 30, 40))
+                    .corner_radius(6.0)
+                    .inner_margin(12.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&log.icon).size(20.0));
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new(&log.action).strong());
+                                ui.label(egui::RichText::new(&log.timestamp).size(11.0).color(egui::Color32::GRAY));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let color = if log.status == "Success" {
+                                    egui::Color32::from_rgb(100, 255, 100)
+                                } else {
+                                    egui::Color32::from_rgb(255, 180, 0)
+                                };
+                                ui.label(egui::RichText::new(&log.status).color(color).strong());
+                            });
+                        });
+                    });
+                ui.add_space(6.0);
+            }
+        });
+    }
+
+    fn show_security_scan(&mut self, ui: &mut egui::Ui) {
+        ui.heading("🛡️ Security Scan");
+        ui.add_space(10.0);
+        ui.label("Scan your system for security threats and vulnerabilities.");
+        ui.add_space(15.0);
+
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(30, 35, 45))
+            .corner_radius(8.0)
+            .inner_margin(16.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("System Security Scan").strong());
+                ui.add_space(12.0);
+
+                if !self.scan_running {
+                    if ui.button(egui::RichText::new("▶ Start Scan").size(16.0)).clicked() {
+                        self.scan_running = true;
+                        self.scan_progress = 0.0;
+                        self.threats_found = 0;
+                    }
+                } else {
+                    ui.add(egui::ProgressBar::new(self.scan_progress).text("Scanning..."));
+                    ui.add_space(8.0);
+                    if ui.button("⏸ Pause").clicked() {
+                        self.scan_running = false;
+                    }
+                    if ui.button("⏹ Stop").clicked() {
+                        self.scan_running = false;
+                        self.scan_progress = 0.0;
+                    }
+                }
+
+                if self.scan_progress >= 1.0 {
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+                    ui.label(egui::RichText::new("✓ Scan Complete").color(egui::Color32::from_rgb(100, 255, 100)).strong());
+                    ui.label(format!("Threats Found: {}", self.threats_found));
+                    if self.threats_found == 0 {
+                        ui.label(egui::RichText::new("🛡️ System is secure!").color(egui::Color32::from_rgb(100, 255, 100)));
+                    }
+                }
+            });
+
+        ui.add_space(20.0);
+
+        ui.label(egui::RichText::new("SCAN OPTIONS").size(14.0).color(egui::Color32::GRAY));
+        ui.add_space(10.0);
+
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(30, 35, 45))
+            .corner_radius(8.0)
+            .inner_margin(16.0)
+            .show(ui, |ui| {
+                ui.checkbox(&mut true, "Scan encrypted files");
+                ui.checkbox(&mut true, "Scan password database");
+                ui.checkbox(&mut true, "Check for vulnerabilities");
+                ui.checkbox(&mut false, "Deep scan (slower)");
+            });
+    }
+
+    fn show_backup_restore(&mut self, ui: &mut egui::Ui) {
+        ui.heading("💾 Backup & Restore");
+        ui.add_space(10.0);
+        ui.label("Create backups and restore your encrypted data.");
+        ui.add_space(15.0);
+
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(30, 35, 45))
+            .corner_radius(8.0)
+            .inner_margin(16.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Backup Configuration").strong());
+                ui.add_space(12.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Backup Location:");
+                    ui.text_edit_singleline(&mut self.backup_location);
+                    if ui.button("📁 Browse").clicked() {
+                        // Browse for location
+                    }
+                });
+
+                ui.add_space(12.0);
+                ui.label(format!("Last Backup: {}", self.last_backup));
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(12.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button(egui::RichText::new("💾 Create Backup").size(14.0)).clicked() {
+                        self.last_backup = "2026-02-01 08:45:00".to_string();
+                    }
+                    if ui.button(egui::RichText::new("📥 Restore Backup").size(14.0)).clicked() {
+                        // Restore
+                    }
+                });
+            });
+
+        ui.add_space(20.0);
+
+        ui.label(egui::RichText::new("BACKUP HISTORY").size(14.0).color(egui::Color32::GRAY));
+        ui.add_space(10.0);
+
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(30, 35, 45))
+            .corner_radius(8.0)
+            .inner_margin(16.0)
+            .show(ui, |ui| {
+                let backups = vec![
+                    ("2026-02-01 07:00:00", "Full Backup", "2.4 GB"),
+                    ("2026-01-31 07:00:00", "Full Backup", "2.3 GB"),
+                    ("2026-01-30 07:00:00", "Incremental", "150 MB"),
+                ];
+
+                for (date, backup_type, size) in backups {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(date).strong());
+                        ui.label(backup_type);
+                        ui.label(size);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("📥 Restore").clicked() {
+                                // Restore this backup
+                            }
+                            if ui.small_button("🗑").clicked() {
+                                // Delete backup
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+                }
+            });
+    }
+
+    fn show_analytics(&mut self, ui: &mut egui::Ui) {
+        ui.heading("📊 Analytics");
+        ui.add_space(10.0);
+        ui.label("View detailed statistics and usage analytics.");
+        ui.add_space(15.0);
+
+        ui.horizontal(|ui| {
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(30, 50, 70))
+                .corner_radius(8.0)
+                .inner_margin(16.0)
+                .show(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    ui.label(egui::RichText::new("Total Operations").size(12.0).color(egui::Color32::GRAY));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("1,247").size(32.0).strong());
+                    ui.label(egui::RichText::new("+12% this month").size(11.0).color(egui::Color32::from_rgb(100, 255, 100)));
+                });
+
+            ui.add_space(10.0);
+
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(50, 30, 70))
+                .corner_radius(8.0)
+                .inner_margin(16.0)
+                .show(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    ui.label(egui::RichText::new("Data Protected").size(12.0).color(egui::Color32::GRAY));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("2.4 GB").size(32.0).strong());
+                    ui.label(egui::RichText::new("127 files").size(11.0).color(egui::Color32::GRAY));
+                });
+
+            ui.add_space(10.0);
+
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(70, 50, 30))
+                .corner_radius(8.0)
+                .inner_margin(16.0)
+                .show(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    ui.label(egui::RichText::new("Security Score").size(12.0).color(egui::Color32::GRAY));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("98%").size(32.0).strong());
+                    ui.label(egui::RichText::new("Excellent").size(11.0).color(egui::Color32::from_rgb(100, 255, 100)));
+                });
+        });
+
+        ui.add_space(20.0);
+
+        ui.label(egui::RichText::new("USAGE BREAKDOWN").size(14.0).color(egui::Color32::GRAY));
+        ui.add_space(10.0);
+
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(30, 35, 45))
+            .corner_radius(8.0)
+            .inner_margin(16.0)
+            .show(ui, |ui| {
+                for (category, percentage) in &self.analytics_data {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(category).strong());
+                        ui.add_space(10.0);
+                        ui.add(egui::ProgressBar::new(*percentage / 100.0).show_percentage());
+                        ui.label(format!("{:.1}%", percentage));
+                    });
+                    ui.add_space(8.0);
+                }
+            });
     }
 
     fn show_settings(&mut self, ui: &mut egui::Ui) {
