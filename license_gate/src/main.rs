@@ -1,12 +1,14 @@
 use eframe::egui;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use chrono::Local;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         centered: true,
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([900.0, 700.0])
-            .with_min_inner_size([800.0, 600.0]),
+            .with_inner_size([1250.0, 800.0])
+            .with_min_inner_size([1000.0, 750.0]),
         ..Default::default()
     };
 
@@ -49,8 +51,10 @@ struct LicenseApp {
     // Encryption feature state
     file_to_encrypt: String,
     encryption_progress: f32,
+    encryption_running: bool,
     // Password manager state
     passwords: HashMap<String, String>,
+    password_visible: HashMap<String, bool>,
     new_site: String,
     new_password: String,
     // Vault state
@@ -64,11 +68,26 @@ struct LicenseApp {
     // Backup/Restore state
     backup_location: String,
     last_backup: String,
+    backup_history: Vec<(String, String, String)>,
     // Analytics state
     analytics_data: Vec<(String, f32)>,
     // Settings
     auto_lock: bool,
     notifications: bool,
+    require_password: bool,
+    two_factor: bool,
+    // Encryption settings
+    use_aes256: bool,
+    delete_original: bool,
+    add_timestamp: bool,
+    // Security scan settings
+    scan_encrypted: bool,
+    scan_passwords: bool,
+    check_vulnerabilities: bool,
+    deep_scan: bool,
+    // Clipboard state
+    clipboard_message: Option<String>,
+    clipboard_timer: f32,
 }
 
 struct ActivityLog {
@@ -140,6 +159,12 @@ impl Default for LicenseApp {
             ("Other".to_string(), 10.0),
         ];
 
+        let backup_history = vec![
+            ("2026-02-01 07:00:00".to_string(), "Full Backup".to_string(), "2.4 GB".to_string()),
+            ("2026-01-31 07:00:00".to_string(), "Full Backup".to_string(), "2.3 GB".to_string()),
+            ("2026-01-30 07:00:00".to_string(), "Incremental".to_string(), "150 MB".to_string()),
+        ];
+
         Self {
             key_input: String::new(),
             status: String::new(),
@@ -149,7 +174,9 @@ impl Default for LicenseApp {
             current_tab: Tab::Dashboard,
             file_to_encrypt: String::new(),
             encryption_progress: 0.0,
+            encryption_running: false,
             passwords,
+            password_visible: HashMap::new(),
             new_site: String::new(),
             new_password: String::new(),
             vault_items,
@@ -159,15 +186,29 @@ impl Default for LicenseApp {
             threats_found: 0,
             backup_location: "/backups/cybervault".to_string(),
             last_backup: "2026-02-01 07:00:00".to_string(),
+            backup_history,
             analytics_data,
             auto_lock: true,
             notifications: true,
+            require_password: true,
+            two_factor: true,
+            use_aes256: true,
+            delete_original: true,
+            add_timestamp: false,
+            scan_encrypted: true,
+            scan_passwords: true,
+            check_vulnerabilities: true,
+            deep_scan: false,
+            clipboard_message: None,
+            clipboard_timer: 0.0,
         }
     }
 }
 
 impl eframe::App for LicenseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Update animations and timers
+        self.update_animations(ctx);
         // Top bar
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.add_space(8.0);
@@ -361,6 +402,63 @@ impl eframe::App for LicenseApp {
 }
 
 impl LicenseApp {
+    fn update_animations(&mut self, ctx: &egui::Context) {
+        // Update clipboard message timer
+        if let Some(_) = self.clipboard_message {
+            self.clipboard_timer -= ctx.input(|i| i.unstable_dt);
+            if self.clipboard_timer <= 0.0 {
+                self.clipboard_message = None;
+            }
+        }
+
+        // Update encryption progress
+        if self.encryption_running && self.encryption_progress < 1.0 {
+            self.encryption_progress = (self.encryption_progress + ctx.input(|i| i.unstable_dt * 0.5)).min(1.0);
+            if self.encryption_progress >= 1.0 {
+                self.encryption_running = false;
+                self.add_activity_log("File encrypted".to_string(), "Success".to_string(), "🔒".to_string());
+            }
+            ctx.request_repaint();
+        }
+
+        // Update security scan progress
+        if self.scan_running && self.scan_progress < 1.0 {
+            self.scan_progress = (self.scan_progress + ctx.input(|i| i.unstable_dt * 0.3)).min(1.0);
+            if self.scan_progress >= 1.0 {
+                self.scan_running = false;
+                // Use timestamp-based pseudo-random for threats
+                let now = Local::now().timestamp() as u32;
+                self.threats_found = if now % 10 < 3 { 1 } else { 0 };
+                self.add_activity_log("Security scan completed".to_string(), 
+                    if self.threats_found == 0 { "No threats".to_string() } else { "Threats found".to_string() },
+                    "🛡️".to_string());
+            }
+            ctx.request_repaint();
+        }
+    }
+
+    fn add_activity_log(&mut self, action: String, status: String, icon: String) {
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        self.activity_logs.insert(0, ActivityLog {
+            timestamp,
+            action,
+            status,
+            icon,
+        });
+        // Keep only last 50 logs
+        if self.activity_logs.len() > 50 {
+            self.activity_logs.truncate(50);
+        }
+    }
+
+    fn copy_to_clipboard(&mut self, text: &str) {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(text);
+            self.clipboard_message = Some("Copied to clipboard!".to_string());
+            self.clipboard_timer = 2.0;
+        }
+    }
+
     fn attempt_unlock(&mut self) {
         self.tries = self.tries.saturating_add(1);
 
@@ -529,21 +627,31 @@ impl LicenseApp {
                 ui.horizontal(|ui| {
                     ui.text_edit_singleline(&mut self.file_to_encrypt);
                     if ui.button("📁 Browse").clicked() {
-                        self.file_to_encrypt = "example_document.pdf".to_string();
+                        let path_opt: Option<PathBuf> = rfd::FileDialog::new()
+                            .add_filter("All Files", &["*"])
+                            .pick_file();
+                        if let Some(path) = path_opt {
+                            self.file_to_encrypt = path.to_string_lossy().into_owned();
+                        }
                     }
                 });
 
                 ui.add_space(12.0);
 
-                if ui.button(egui::RichText::new("🔒 Encrypt File").size(14.0)).clicked() {
-                    self.encryption_progress = 1.0;
+                if ui.add_enabled(!self.encryption_running && !self.file_to_encrypt.is_empty(), 
+                    egui::Button::new(egui::RichText::new("🔒 Encrypt File").size(14.0))).clicked() {
+                    self.encryption_progress = 0.0;
+                    self.encryption_running = true;
                 }
 
                 if self.encryption_progress > 0.0 {
                     ui.add_space(10.0);
                     ui.add(egui::ProgressBar::new(self.encryption_progress).text("Encrypting..."));
-                    ui.add_space(6.0);
-                    ui.label(egui::RichText::new("✓ File encrypted successfully!").color(egui::Color32::from_rgb(100, 255, 100)));
+                    if self.encryption_progress >= 1.0 && !self.encryption_running {
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("✓ File encrypted successfully!").color(egui::Color32::from_rgb(100, 255, 100)));
+                        ui.label(format!("Encrypted: {}", self.file_to_encrypt));
+                    }
                 }
             });
 
@@ -552,9 +660,9 @@ impl LicenseApp {
         ui.label(egui::RichText::new("ENCRYPTION SETTINGS").size(14.0).color(egui::Color32::GRAY));
         ui.add_space(10.0);
 
-        ui.checkbox(&mut true, "Use AES-256 encryption");
-        ui.checkbox(&mut true, "Delete original after encryption");
-        ui.checkbox(&mut false, "Add timestamp to encrypted files");
+        ui.checkbox(&mut self.use_aes256, "Use AES-256 encryption");
+        ui.checkbox(&mut self.delete_original, "Delete original after encryption");
+        ui.checkbox(&mut self.add_timestamp, "Add timestamp to encrypted files");
     }
 
     fn show_passwords(&mut self, ui: &mut egui::Ui) {
@@ -587,6 +695,8 @@ impl LicenseApp {
                 if ui.button("➕ Add Password").clicked() {
                     if !self.new_site.is_empty() && !self.new_password.is_empty() {
                         self.passwords.insert(self.new_site.clone(), self.new_password.clone());
+                        self.add_activity_log(format!("Password added for {}", self.new_site.clone()), 
+                            "Success".to_string(), "🔑".to_string());
                         self.new_site.clear();
                         self.new_password.clear();
                     }
@@ -599,8 +709,13 @@ impl LicenseApp {
         ui.label(egui::RichText::new("STORED PASSWORDS").size(14.0).color(egui::Color32::GRAY));
         ui.add_space(10.0);
 
-        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-            for (site, _password) in &self.passwords {
+        let mut sites_to_remove = Vec::new();
+        let mut passwords_to_copy = Vec::new();
+        let mut passwords_to_toggle = Vec::new();
+        
+        egui::ScrollArea::vertical().max_height(500.0).show(ui, |ui| {
+            for (site, password) in &self.passwords {
+                let visible = self.password_visible.get(site).copied().unwrap_or(false);
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgb(25, 30, 40))
                     .corner_radius(6.0)
@@ -610,21 +725,46 @@ impl LicenseApp {
                             ui.label(egui::RichText::new(site).strong());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui.small_button("🗑").clicked() {
-                                    // Would delete in real app
+                                    sites_to_remove.push(site.clone());
                                 }
                                 if ui.small_button("📋").clicked() {
-                                    // Would copy in real app
+                                    passwords_to_copy.push(password.clone());
                                 }
-                                if ui.small_button("👁").clicked() {
-                                    // Would show in real app
+                                if ui.small_button(if visible { "🙈" } else { "👁" }).clicked() {
+                                    passwords_to_toggle.push(site.clone());
                                 }
                             });
                         });
-                        ui.label(egui::RichText::new("••••••••••").color(egui::Color32::GRAY));
+                        if visible {
+                            ui.label(egui::RichText::new(password).color(egui::Color32::from_rgb(200, 200, 200)));
+                        } else {
+                            ui.label(egui::RichText::new("••••••••••").color(egui::Color32::GRAY));
+                        }
                     });
                 ui.add_space(6.0);
             }
         });
+        
+        // Process actions after the UI loop
+        for password in passwords_to_copy {
+            self.copy_to_clipboard(&password);
+        }
+        for site in passwords_to_toggle {
+            let current = self.password_visible.get(&site).copied().unwrap_or(false);
+            self.password_visible.insert(site, !current);
+        }
+        for site in sites_to_remove {
+            self.passwords.remove(&site);
+            self.password_visible.remove(&site);
+            self.add_activity_log(format!("Password removed for {}", site), 
+                "Success".to_string(), "🗑".to_string());
+        }
+
+        // Show clipboard message
+        if let Some(ref msg) = self.clipboard_message {
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new(msg).color(egui::Color32::from_rgb(100, 255, 100)));
+        }
     }
 
     fn show_vault(&mut self, ui: &mut egui::Ui) {
@@ -635,19 +775,78 @@ impl LicenseApp {
 
         ui.horizontal(|ui| {
             if ui.button("➕ Add File").clicked() {
-                // Would add file in real app
+                let path_opt: Option<PathBuf> = rfd::FileDialog::new()
+                    .add_filter("All Files", &["*"])
+                    .pick_file();
+                if let Some(path) = path_opt {
+                    let file_name: String = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let size = if let Ok(metadata) = std::fs::metadata(&path) {
+                        let bytes = metadata.len();
+                        if bytes < 1024 {
+                            format!("{} B", bytes)
+                        } else if bytes < 1024 * 1024 {
+                            format!("{:.1} KB", bytes as f64 / 1024.0)
+                        } else {
+                            format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+                        }
+                    } else {
+                        "Unknown".to_string()
+                    };
+                    let category = if file_name.ends_with(".pdf") || file_name.ends_with(".doc") || file_name.ends_with(".xlsx") {
+                        "Documents".to_string()
+                    } else if file_name.ends_with(".jpg") || file_name.ends_with(".png") || file_name.ends_with(".zip") {
+                        "Media".to_string()
+                    } else {
+                        "Other".to_string()
+                    };
+                    self.vault_items.push(VaultItem {
+                        name: file_name.clone(),
+                        category,
+                        size,
+                        encrypted: true,
+                    });
+                    self.add_activity_log(format!("File added to vault: {}", file_name), 
+                        "Success".to_string(), "🗄".to_string());
+                }
             }
             if ui.button("📥 Import").clicked() {
-                // Would import in real app
+                let path_opt: Option<PathBuf> = rfd::FileDialog::new()
+                    .add_filter("All Files", &["*"])
+                    .pick_file();
+                if let Some(path) = path_opt {
+                    let file_name: String = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    self.vault_items.push(VaultItem {
+                        name: file_name.clone(),
+                        category: "Imported".to_string(),
+                        size: "Unknown".to_string(),
+                        encrypted: false,
+                    });
+                    self.add_activity_log(format!("File imported: {}", file_name), 
+                        "Success".to_string(), "📥".to_string());
+                }
             }
             if ui.button("📤 Export").clicked() {
-                // Would export in real app
+                let dir_opt: Option<PathBuf> = rfd::FileDialog::new().pick_folder();
+                if let Some(dir) = dir_opt {
+                    self.add_activity_log(format!("Vault exported to: {}", dir.to_string_lossy()), 
+                        "Success".to_string(), "📤".to_string());
+                }
             }
         });
 
         ui.add_space(15.0);
 
         // Vault items
+        let mut items_to_remove = Vec::new();
+        let mut download_actions = Vec::new();
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("vault_grid")
                 .num_columns(5)
@@ -661,7 +860,7 @@ impl LicenseApp {
                     ui.label(egui::RichText::new("Actions").strong());
                     ui.end_row();
 
-                    for item in &self.vault_items {
+                    for (idx, item) in self.vault_items.iter().enumerate() {
                         ui.label(&item.name);
                         ui.label(&item.category);
                         ui.label(&item.size);
@@ -671,17 +870,37 @@ impl LicenseApp {
                             ui.label(egui::RichText::new("⚠ Unencrypted").color(egui::Color32::from_rgb(255, 180, 0)));
                         }
                         ui.horizontal(|ui| {
+                            let item_name = item.name.clone();
                             if ui.small_button("📥").clicked() {
-                                // Download
+                                let _dir_opt: Option<PathBuf> = rfd::FileDialog::new().pick_folder();
+                                if _dir_opt.is_some() {
+                                    download_actions.push(item_name);
+                                }
                             }
                             if ui.small_button("🗑").clicked() {
-                                // Delete
+                                items_to_remove.push(idx);
                             }
                         });
                         ui.end_row();
                     }
                 });
         });
+        // Process download actions after the loop
+        for item_name in download_actions {
+            self.add_activity_log(format!("File downloaded: {}", item_name), 
+                "Success".to_string(), "📥".to_string());
+        }
+        // Remove deleted items (in reverse order to maintain indices)
+        items_to_remove.sort_unstable();
+        items_to_remove.reverse();
+        for idx in items_to_remove {
+            if idx < self.vault_items.len() {
+                let item_name = self.vault_items[idx].name.clone();
+                self.vault_items.remove(idx);
+                self.add_activity_log(format!("File removed from vault: {}", item_name), 
+                    "Success".to_string(), "🗑".to_string());
+            }
+        }
     }
 
     fn show_activity_log(&mut self, ui: &mut egui::Ui) {
@@ -692,19 +911,30 @@ impl LicenseApp {
 
         ui.horizontal(|ui| {
             if ui.button("🔄 Refresh").clicked() {
-                // Refresh logs
+                self.add_activity_log("Activity log refreshed".to_string(), 
+                    "Success".to_string(), "🔄".to_string());
             }
             if ui.button("📥 Export").clicked() {
-                // Export logs
+                let path_opt: Option<PathBuf> = rfd::FileDialog::new()
+                    .add_filter("Text Files", &["txt"])
+                    .set_file_name("activity_log.txt")
+                    .save_file();
+                if let Some(path) = path_opt {
+                    // In a real app, would write logs to file
+                    self.add_activity_log(format!("Activity log exported to: {}", path.to_string_lossy()), 
+                        "Success".to_string(), "📥".to_string());
+                }
             }
             if ui.button("🗑 Clear").clicked() {
-                // Clear logs
+                self.activity_logs.clear();
+                self.add_activity_log("Activity log cleared".to_string(), 
+                    "Success".to_string(), "🗑".to_string());
             }
         });
 
         ui.add_space(15.0);
 
-        egui::ScrollArea::vertical().max_height(500.0).show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(600.0).show(ui, |ui| {
             for log in &self.activity_logs {
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgb(25, 30, 40))
@@ -751,6 +981,8 @@ impl LicenseApp {
                         self.scan_running = true;
                         self.scan_progress = 0.0;
                         self.threats_found = 0;
+                        self.add_activity_log("Security scan started".to_string(), 
+                            "In progress".to_string(), "🛡️".to_string());
                     }
                 } else {
                     ui.add(egui::ProgressBar::new(self.scan_progress).text("Scanning..."));
@@ -761,6 +993,8 @@ impl LicenseApp {
                     if ui.button("⏹ Stop").clicked() {
                         self.scan_running = false;
                         self.scan_progress = 0.0;
+                        self.add_activity_log("Security scan stopped".to_string(), 
+                            "Cancelled".to_string(), "⏹".to_string());
                     }
                 }
 
@@ -786,10 +1020,10 @@ impl LicenseApp {
             .corner_radius(8.0)
             .inner_margin(16.0)
             .show(ui, |ui| {
-                ui.checkbox(&mut true, "Scan encrypted files");
-                ui.checkbox(&mut true, "Scan password database");
-                ui.checkbox(&mut true, "Check for vulnerabilities");
-                ui.checkbox(&mut false, "Deep scan (slower)");
+                ui.checkbox(&mut self.scan_encrypted, "Scan encrypted files");
+                ui.checkbox(&mut self.scan_passwords, "Scan password database");
+                ui.checkbox(&mut self.check_vulnerabilities, "Check for vulnerabilities");
+                ui.checkbox(&mut self.deep_scan, "Deep scan (slower)");
             });
     }
 
@@ -811,7 +1045,10 @@ impl LicenseApp {
                     ui.label("Backup Location:");
                     ui.text_edit_singleline(&mut self.backup_location);
                     if ui.button("📁 Browse").clicked() {
-                        // Browse for location
+                        let dir_opt: Option<PathBuf> = rfd::FileDialog::new().pick_folder();
+                        if let Some(dir) = dir_opt {
+                            self.backup_location = dir.to_string_lossy().into_owned();
+                        }
                     }
                 });
 
@@ -824,10 +1061,31 @@ impl LicenseApp {
 
                 ui.horizontal(|ui| {
                     if ui.button(egui::RichText::new("💾 Create Backup").size(14.0)).clicked() {
-                        self.last_backup = "2026-02-01 08:45:00".to_string();
+                        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                        self.last_backup = timestamp.clone();
+                        let backup_type = if self.backup_history.is_empty() || 
+                            self.backup_history[0].1 == "Incremental" {
+                            "Full Backup"
+                        } else {
+                            "Incremental"
+                        };
+                        let size = if backup_type == "Full Backup" {
+                            "2.4 GB"
+                        } else {
+                            "150 MB"
+                        };
+                        self.backup_history.insert(0, (timestamp.clone(), backup_type.to_string(), size.to_string()));
+                        self.add_activity_log(format!("Backup created: {}", backup_type), 
+                            "Success".to_string(), "💾".to_string());
                     }
                     if ui.button(egui::RichText::new("📥 Restore Backup").size(14.0)).clicked() {
-                        // Restore
+                        let path_opt: Option<PathBuf> = rfd::FileDialog::new()
+                            .add_filter("Backup Files", &["bak", "backup"])
+                            .pick_file();
+                        if let Some(path) = path_opt {
+                            self.add_activity_log(format!("Backup restored from: {}", path.to_string_lossy()), 
+                                "Success".to_string(), "📥".to_string());
+                        }
                     }
                 });
             });
@@ -842,27 +1100,39 @@ impl LicenseApp {
             .corner_radius(8.0)
             .inner_margin(16.0)
             .show(ui, |ui| {
-                let backups = vec![
-                    ("2026-02-01 07:00:00", "Full Backup", "2.4 GB"),
-                    ("2026-01-31 07:00:00", "Full Backup", "2.3 GB"),
-                    ("2026-01-30 07:00:00", "Incremental", "150 MB"),
-                ];
-
-                for (date, backup_type, size) in backups {
+                let mut backups_to_remove = Vec::new();
+                let mut restore_actions = Vec::new();
+                for (idx, (date, backup_type, size)) in self.backup_history.iter().enumerate() {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(date).strong());
                         ui.label(backup_type);
                         ui.label(size);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("📥 Restore").clicked() {
-                                // Restore this backup
+                                restore_actions.push((date.clone(), backup_type.clone()));
                             }
                             if ui.small_button("🗑").clicked() {
-                                // Delete backup
+                                backups_to_remove.push(idx);
                             }
                         });
                     });
                     ui.add_space(8.0);
+                }
+                // Process restore actions after the loop
+                for (date, backup_type) in restore_actions {
+                    self.add_activity_log(format!("Backup restored: {} ({})", date, backup_type), 
+                        "Success".to_string(), "📥".to_string());
+                }
+                // Remove deleted backups
+                backups_to_remove.sort_unstable();
+                backups_to_remove.reverse();
+                for idx in backups_to_remove {
+                    if idx < self.backup_history.len() {
+                        let backup_info = self.backup_history[idx].0.clone();
+                        self.backup_history.remove(idx);
+                        self.add_activity_log(format!("Backup deleted: {}", backup_info), 
+                            "Success".to_string(), "🗑".to_string());
+                    }
                 }
             });
     }
@@ -951,8 +1221,8 @@ impl LicenseApp {
             .show(ui, |ui| {
                 ui.checkbox(&mut self.auto_lock, "Auto-lock after 15 minutes of inactivity");
                 ui.checkbox(&mut self.notifications, "Enable security notifications");
-                ui.checkbox(&mut true, "Require password on startup");
-                ui.checkbox(&mut true, "Enable two-factor authentication");
+                ui.checkbox(&mut self.require_password, "Require password on startup");
+                ui.checkbox(&mut self.two_factor, "Enable two-factor authentication");
             });
 
         ui.add_space(20.0);
