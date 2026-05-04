@@ -2,7 +2,7 @@
 
 ## CyberVault Pro - Secure Data Manager
 
-A reverse engineering challenge featuring a production-ready license gate system built with Rust and egui.
+A reverse engineering test project featuring a production-ready license gate system built with Rust and egui.
 
 ### Overview
 
